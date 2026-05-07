@@ -245,8 +245,6 @@ const crawler = new PlaywrightCrawler({
   requestHandlerTimeoutSecs: 180,
   navigationTimeoutSecs: 60,
   browserPoolOptions: { useFingerprints: true },
-  // Don't block on 403 — let handler deal with it
-  additionalMimeTypes: ['text/html'],
 
   preNavigationHooks: [
     async ({ page, request }) => {

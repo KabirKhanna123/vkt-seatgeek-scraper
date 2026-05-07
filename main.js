@@ -231,17 +231,43 @@ const crawler = new PlaywrightCrawler({
   launchContext: {
     launchOptions: {
       headless: true,
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-blink-features=AutomationControlled'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+      ],
     },
   },
   maxConcurrency: 1,
-  maxRequestRetries: 1,
+  maxRequestRetries: 2,
   requestHandlerTimeoutSecs: 180,
   navigationTimeoutSecs: 60,
   browserPoolOptions: { useFingerprints: true },
+  // Don't block on 403 — let handler deal with it
+  additionalMimeTypes: ['text/html'],
 
   preNavigationHooks: [
-    async ({ page }) => {
+    async ({ page, request }) => {
+      // Set realistic browser headers to avoid 403
+      await page.setExtraHTTPHeaders({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+      });
+
       await page.route('**/*', async route => {
         try {
           const req = route.request();
@@ -256,8 +282,16 @@ const crawler = new PlaywrightCrawler({
           await route.continue();
         } catch (_) { try { await route.continue(); } catch (_) {} }
       });
+
       await page.addInitScript(() => {
+        // Stealth overrides
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
+        window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, 'permissions', {
+          get: () => ({ query: () => Promise.resolve({ state: 'granted' }) })
+        });
       });
     },
   ],
@@ -268,11 +302,20 @@ const crawler = new PlaywrightCrawler({
     const originalName = event.name || `Event ${eventId}`;
     console.log(`\nScraping SeatGeek: ${originalName} (${eventId})`);
 
+    // SeatGeek sometimes needs a landing page visit first to set cookies
+    try {
+      await page.goto('https://seatgeek.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
+      await page.waitForTimeout(2000);
+      await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    } catch (e) {
+      console.log('  Navigation error:', e.message.slice(0,60));
+    }
+
     const title = await page.title().catch(() => '');
     console.log(`  Title: ${title.slice(0,80)}`);
 
     // Check if blocked
-    if (title.toLowerCase().includes('access denied') || title.toLowerCase().includes('captcha')) {
+    if (title.toLowerCase().includes('access denied') || title.toLowerCase().includes('captcha') || title === '') {
       console.log('  Blocked — skipping');
       return;
     }

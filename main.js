@@ -223,9 +223,6 @@ if (manualUrls && manualUrls.length > 0) {
 
 console.log(`SeatGeek URLs to scrape: ${requests.length}`);
 
-// Patch Crawlee to not throw on 403 for SeatGeek
-const origThrow = Object.getPrototypeOf(Object.getPrototypeOf({})).constructor;
-
 const crawler = new PlaywrightCrawler({
   proxyConfiguration: await Actor.createProxyConfiguration({
     groups: ['RESIDENTIAL'],

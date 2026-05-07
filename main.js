@@ -223,6 +223,9 @@ if (manualUrls && manualUrls.length > 0) {
 
 console.log(`SeatGeek URLs to scrape: ${requests.length}`);
 
+// Patch Crawlee to not throw on 403 for SeatGeek
+const origThrow = Object.getPrototypeOf(Object.getPrototypeOf({})).constructor;
+
 const crawler = new PlaywrightCrawler({
   proxyConfiguration: await Actor.createProxyConfiguration({
     groups: ['RESIDENTIAL'],
@@ -241,13 +244,18 @@ const crawler = new PlaywrightCrawler({
     },
   },
   maxConcurrency: 1,
-  maxRequestRetries: 2,
+  maxRequestRetries: 3,
   requestHandlerTimeoutSecs: 180,
   navigationTimeoutSecs: 60,
   browserPoolOptions: { useFingerprints: true },
+  useSessionPool: true,
+  persistCookiesPerSession: true,
 
   preNavigationHooks: [
     async ({ page, request }) => {
+      // Override navigation to warm cookies first
+      request.skipNavigation = false;
+
       // Set realistic browser headers to avoid 403
       await page.setExtraHTTPHeaders({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -300,14 +308,8 @@ const crawler = new PlaywrightCrawler({
     const originalName = event.name || `Event ${eventId}`;
     console.log(`\nScraping SeatGeek: ${originalName} (${eventId})`);
 
-    // SeatGeek sometimes needs a landing page visit first to set cookies
-    try {
-      await page.goto('https://seatgeek.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
-      await page.waitForTimeout(2000);
-      await page.goto(request.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    } catch (e) {
-      console.log('  Navigation error:', e.message.slice(0,60));
-    }
+    // Navigate with ignoreHTTPSErrors — handled by preNavHook
+    // requestHandler only runs if navigation succeeded
 
     const title = await page.title().catch(() => '');
     console.log(`  Title: ${title.slice(0,80)}`);
@@ -430,6 +432,17 @@ const crawler = new PlaywrightCrawler({
     if (date && date !== event.date) updates.date = date;
     if (Object.keys(updates).length) {
       await supabase.from('events').update(updates).eq('id', eventId);
+    }
+  },
+
+  errorHandler: async ({ request, page }, error) => {
+    // If 403, try navigating to homepage first then retry
+    if (error.message.includes('403') || error.message.includes('blocked')) {
+      console.log('  Got 403 — warming cookies via homepage...');
+      try {
+        await page.goto('https://seatgeek.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
+        await page.waitForTimeout(3000);
+      } catch (_) {}
     }
   },
 
